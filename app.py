@@ -5,41 +5,66 @@ import streamlit as st
 # --- Constants ---
 WEIGHT_FILE = "data/weight per pipe (kg).xlsx"
 
-# --- Load weight data ---
+# --- Load Weight File (fixed master) ---
 def load_weight_data():
-    try:
-        return pd.read_excel(WEIGHT_FILE)
-    except Exception as e:
-        st.error(f"Error loading weight file: {e}")
-        return None
+    return pd.read_excel(WEIGHT_FILE)
 
-# --- Find latest stock file ---
+# --- Find latest Stock File (daily) ---
 def get_latest_stock_file():
-    stock_files = glob.glob("data/Stocks*.xlsx")  # match any Stocks(...).xlsx
+    stock_files = glob.glob("data/Stocks*.xlsx")
     if not stock_files:
         return None
     return max(stock_files, key=os.path.getctime)
 
-# --- Load stock data ---
+# --- Load Stock Data ---
 def load_stock_data():
     latest_file = get_latest_stock_file()
     if latest_file and os.path.exists(latest_file):
         return pd.read_excel(latest_file, sheet_name="Table 1"), latest_file
     return None, None
 
-# --- App UI ---
+# --- Parse user input ---
+def parse_input(user_text):
+    user_text = user_text.strip().lower()
+
+    # Extract thickness (mm) or weight (kg)
+    thickness_match = re.search(r"([\d.]+)\s*mm", user_text)
+    weight_match = re.search(r"([\d.]+)\s*kg", user_text)
+
+    thickness = float(thickness_match.group(1)) if thickness_match else None
+    weight = float(weight_match.group(1)) if weight_match else None
+
+    # Extract pipe size (first part before space or comma)
+    pipe_size = re.split(r"[ ,]", user_text)[0]
+    return pipe_size, thickness, weight
+
+# --- Match pipe size in weight file ---
+def find_weight_per_pipe(weight_df, pipe_size, thickness=None, weight=None):
+    row = weight_df[
+        weight_df.astype(str).apply(lambda x: pipe_size in x.values, axis=1)
+    ]
+    if row.empty:
+        return None, None
+
+    if thickness:
+        if str(thickness) in row.columns:
+            return thickness, row[str(thickness)].values[0]
+    elif weight:
+        for col in row.columns[3:]:
+            if abs(row[col].values[0] - weight) < 0.5:  # tolerance
+                return float(col), row[col].values[0]
+    return None, None
+
+# --- Streamlit App ---
 st.title("📊 Pipe Stock Availability Checker")
 
-# Load weight data
+# Load master weight data
 weight_df = load_weight_data()
-if weight_df is None:
-    st.stop()
 
-# Load stock data
+# Load daily stock data
 stock_df, stock_file = load_stock_data()
-
 if stock_df is None:
-    st.warning("⚠️ No stock file found in 'data/' folder.")
+    st.error("❌ No daily stock file found in 'data/'. Please upload.")
     uploaded_file = st.file_uploader("Upload today's stock file", type="xlsx")
     if uploaded_file:
         stock_df = pd.read_excel(uploaded_file, sheet_name="Table 1")
@@ -50,85 +75,50 @@ else:
     st.success(f"✅ Using stock file: {os.path.basename(stock_file)}")
 
 # --- User Input ---
-st.subheader("🔍 Search Stock")
-
 pipe_input = st.text_input(
-    "Enter pipe (e.g. `40x40 1.6mm`, `40x40 18kg`, `20NB 2mm`)"
+    "Enter pipe (e.g. `40x40 1.6mm`, `40x40 18kg`, `20NB 2mm`, `19.05 OD 1.2mm`)"
 ).strip()
-
 quantity = st.number_input("Enter required quantity (pcs)", min_value=1, step=1)
 
-# --- Processing ---
+# --- Process Search ---
 if st.button("Check Availability") and pipe_input:
+    pipe_size, thickness, weight = parse_input(pipe_input)
 
-    # Detect if input contains mm or kg
-    thickness_match = re.search(r"([\d.]+)\s*mm", pipe_input.lower())
-    weight_match = re.search(r"([\d.]+)\s*kg", pipe_input.lower())
+    # Find weight per pipe
+    thickness, weight_per_pipe = find_weight_per_pipe(weight_df, pipe_size, thickness, weight)
 
-    pipe_size = pipe_input.split()[0]  # first part like 40x40 or 20NB
-    thickness = float(thickness_match.group(1)) if thickness_match else None
-    weight = float(weight_match.group(1)) if weight_match else None
-
-    st.write(f"🔎 Searching for pipe size: **{pipe_size}**")
-
-    # --- Find weight per pipe ---
-    weight_per_pipe = None
-
-    if thickness:
-        # Lookup weight from weight_df
-        try:
-            weight_row = weight_df[
-                (weight_df.astype(str).apply(lambda x: pipe_size in x.values, axis=1))
-            ]
-            if not weight_row.empty:
-                if str(thickness) in weight_row.columns:
-                    weight_per_pipe = weight_row[str(thickness)].values[0]
-        except Exception:
-            pass
-
-    elif weight:
-        # Reverse lookup: find matching weight column
-        try:
-            weight_row = weight_df[
-                (weight_df.astype(str).apply(lambda x: pipe_size in x.values, axis=1))
-            ]
-            if not weight_row.empty:
-                for col in weight_row.columns[3:]:  # thickness columns
-                    if abs(weight_row[col].values[0] - weight) < 0.5:
-                        thickness = float(col)
-                        weight_per_pipe = weight_row[col].values[0]
-                        break
-        except Exception:
-            pass
-
-    if weight_per_pipe is None:
+    if not weight_per_pipe:
         st.error("❌ Pipe size or thickness/weight not found in weight table.")
         st.stop()
 
-    # --- Check stock availability ---
+    # Find stock (MT) for that pipe size + thickness
     if thickness and str(thickness) in stock_df.columns:
         stock_row = stock_df[
             stock_df.astype(str).apply(lambda x: pipe_size in x.values, axis=1)
         ]
         if not stock_row.empty:
-            stock_mt = stock_row[str(thickness)].values[0]  # MT from stock
+            stock_mt = stock_row[str(thickness)].values[0]
             stock_kg = stock_mt * 1000
             available_pcs = int(stock_kg / weight_per_pipe)
+            order_weight = quantity * weight_per_pipe
+
+            st.info(f"🔎 Pipe Size: **{pipe_size}** | Thickness: **{thickness} mm**")
+            st.info(f"⚖️ Weight per pipe: **{weight_per_pipe:.2f} kg**")
+            st.info(f"📦 Total stock: **{stock_mt:.2f} MT ({available_pcs} pcs)**")
 
             if available_pcs >= quantity:
                 st.success(
                     f"✅ Available! {available_pcs} pcs in stock. "
-                    f"Requested: {quantity} pcs "
-                    f"(~{quantity * weight_per_pipe:.2f} kg)"
+                    f"Requested: {quantity} pcs (~{order_weight:.2f} kg)"
                 )
             else:
                 st.warning(
-                    f"⚠️ Not enough stock. Only {available_pcs} pcs available, "
-                    f"but requested {quantity} pcs."
+                    f"⚠️ Not enough stock. Only {available_pcs} pcs available "
+                    f"(~{stock_kg:.2f} kg), requested {quantity} pcs "
+                    f"(~{order_weight:.2f} kg)."
                 )
         else:
             st.error("❌ Pipe size not found in stock sheet.")
     else:
         st.error("❌ Thickness column not found in stock sheet.")
-
 
