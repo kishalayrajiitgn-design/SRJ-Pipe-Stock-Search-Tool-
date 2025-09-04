@@ -1,152 +1,105 @@
-import os
-import glob
+from flask import Flask, render_template, request
 import pandas as pd
-import streamlit as st
 
-# --------------------------
-# File paths
-# --------------------------
-DATA_DIR = "data"
-WEIGHT_FILE = os.path.join(DATA_DIR, "weight_per_pipe.xlsx")
+app = Flask(__name__)
 
-# --------------------------
-# Helpers
-# --------------------------
-def normalize_columns(df):
-    """Standardize thickness columns to remove .0 endings (e.g. 1.20 -> 1.2)."""
-    rename_map = {}
-    for col in df.columns:
-        try:
-            val = float(col)
-            rename_map[col] = str(val).rstrip("0").rstrip(".")
-        except:
-            rename_map[col] = col
-    return df.rename(columns=rename_map)
+# Load fixed weight per pipe file (kg)
+weight_df = pd.read_excel("weight_per_pipe.xlsx")
 
-# --------------------------
-# Load fixed weight file
-# --------------------------
-@st.cache_data
-def load_weight():
-    df = pd.read_excel(WEIGHT_FILE)
-    df = normalize_columns(df)
-    return df
+def load_stock(file_name):
+    # Load daily stock file
+    stock_df = pd.read_excel(file_name)
+    return stock_df
 
-# --------------------------
-# Load latest stock file
-# --------------------------
-@st.cache_data
-def load_stock():
-    stock_files = glob.glob(os.path.join(DATA_DIR, "Stocks*.xlsx"))
-    if not stock_files:
-        st.error(f"❌ No stock file found in `{DATA_DIR}`. Please upload today's file.")
-        st.stop()
-    latest_file = max(stock_files, key=os.path.getctime)
-    df = pd.read_excel(latest_file, header=1)  # stock sheet usually has header offset
-    df = normalize_columns(df)
-    return df, os.path.basename(latest_file)
+def parse_input(user_input):
+    """
+    Parse user input formats like:
+    '2x2 18kg', '40x40 12kg', '20x20 1.6mm'
+    Return a dict: {'size':..., 'thickness':..., 'weight':..., 'unit':...}
+    """
+    input_str = user_input.lower().replace(" ", "")
+    result = {"size": None, "thickness": None, "weight": None, "unit": None}
+    
+    # If kg is in input
+    if "kg" in input_str:
+        parts = input_str.split("kg")
+        result["weight"] = float(parts[0].replace("x", ""))
+        result["unit"] = "kg"
+        if "x" in parts[0]:
+            result["size"] = parts[0].split("x")[0] + "x" + parts[0].split("x")[1]
+    elif "mm" in input_str:
+        parts = input_str.split("mm")
+        result["thickness"] = float(parts[0].split("x")[-1])
+        result["size"] = parts[0].split(str(result["thickness"]))[0]
+        result["unit"] = "mm"
+    else:
+        result["size"] = input_str
+    return result
 
-# --------------------------
-# Parse user query
-# --------------------------
-def parse_query(query):
-    query = query.strip().lower().replace("inch", '"').replace("inches", '"')
-    size, thickness, weight = None, None, None
-    parts = query.split()
-    for p in parts:
-        if "nb" in p or "od" in p or "x" in p or '"' in p or "mm" in p:
-            size = p.replace("mm", "")
-        elif "mm" in p:
-            thickness = p.replace("mm", "")
-        elif "kg" in p:
-            weight = p.replace("kg", "")
-    return size, thickness, weight
+def get_weight_from_size_thickness(size, thickness):
+    # Lookup weight per pipe from weight_df
+    df = weight_df.copy()
+    row = df[df.iloc[:, 0].astype(str).str.contains(str(size))]  # match size
+    if not row.empty:
+        # Find closest thickness column
+        thickness_cols = [c for c in df.columns if isinstance(c, float) or c.replace('.', '', 1).isdigit()]
+        closest_thickness = min(thickness_cols, key=lambda x: abs(float(x)-float(thickness)))
+        weight = row[closest_thickness].values[0]
+        return weight
+    return None
 
-# --------------------------
-# Main matching logic
-# --------------------------
-def check_availability(size, thickness, weight, qty, stock_df, weight_df):
-    # --- Find matching row in weight table ---
-    mask = (
-        (weight_df.iloc[:, 0].astype(str).str.lower() == str(size).lower()) |
-        (weight_df.iloc[:, 1].astype(str).str.lower() == str(size).lower()) |
-        (weight_df.iloc[:, 2].astype(str).str.lower() == str(size).lower())
-    )
-    row = weight_df[mask]
-    if row.empty:
-        return None, None, None, "❌ Pipe size not found in weight table."
-    row = row.iloc[0]
-
-    # --- Determine weight per pipe ---
+def check_stock(stock_df, size, weight=None, thickness=None, qty_required=1):
+    """
+    Check stock availability in MT or pieces
+    """
+    df = stock_df.copy()
+    
+    # Filter by size
+    filtered = df[df['PIPE SIZES Either in mm or NB or OD (MM =OD)'].astype(str).str.contains(size)]
+    
+    if filtered.empty:
+        return {"available": "No", "stock_qty": 0}
+    
+    # Find matching column for thickness
     if thickness:
-        if thickness not in row.index:
-            return None, None, None, f"❌ Thickness {thickness}mm not found for {size}."
-        weight_per_pc = row[thickness]
+        thickness_col = min([c for c in df.columns if isinstance(c,float)], key=lambda x: abs(x-thickness))
     elif weight:
-        numeric_cols = [c for c in row.index if c.replace(".", "").isdigit()]
-        vals = row[numeric_cols].astype(float)
-        closest = vals[abs(vals - float(weight)).idxmin()]
-        weight_per_pc = closest
-        thickness = abs(vals - float(weight)).idxmin()
+        # Convert weight to thickness using weight_df
+        thickness = None
+        for idx, row in weight_df.iterrows():
+            if str(size) in str(row.iloc[0]):
+                thickness_cols = [c for c in row.index if isinstance(c, float) or c.replace('.', '', 1).isdigit()]
+                thickness_col = min(thickness_cols, key=lambda x: abs(row[x]-weight))
+                break
     else:
-        return None, None, None, "❌ Neither thickness nor weight specified."
+        thickness_col = 'Grand Total'
+    
+    stock_qty = filtered[thickness_col].sum()
+    
+    return {
+        "available": "Yes" if stock_qty >= qty_required else "No",
+        "stock_qty": stock_qty
+    }
 
-    total_weight_kg = weight_per_pc * qty
-    total_weight_mt = total_weight_kg / 1000
-
-    # --- Lookup in stock file ---
-    stock_mask = stock_df.iloc[:, 1].astype(str).str.lower() == str(size).lower()
-    stock_row = stock_df[stock_mask]
-    if stock_row.empty:
-        return None, None, None, "❌ Size not found in stock file."
-
-    available_mt = stock_row.iloc[0].get(str(thickness), 0)
-    available_pcs = (available_mt * 1000) / weight_per_pc
-
-    if available_pcs >= qty:
-        status = "✅ Available"
-    else:
-        status = "❌ Not enough stock"
-
-    return available_pcs, available_mt, (total_weight_kg, total_weight_mt), status
-
-# --------------------------
-# Streamlit UI
-# --------------------------
-def main():
-    st.title("📊 Pipe Stock Availability Checker")
-
-    weight_df = load_weight()
-    stock_df, stock_file = load_stock()
-    st.success(f"✅ Using stock file: {stock_file}")
-
-    query = st.text_input("Enter pipe (e.g. 40x40 1.6mm, 40x40 18kg, 20NB 2mm, 0.75\" 1.2mm)")
-    qty = st.number_input("Enter required quantity (pcs)", min_value=1, value=10)
-
-    if st.button("Check Availability") and query:
-        size, thickness, weight = parse_query(query)
-        available_pcs, available_mt, total_weight, status = check_availability(
-            size, thickness, weight, qty, stock_df, weight_df
-        )
-
-        st.subheader("🔍 Result")
-        st.write(f"**Query:** {query}")
-        st.write(f"**Required Qty:** {qty} pcs")
-
-        if status.startswith("❌"):
-            st.error(status)
-        else:
-            st.success(status)
-            st.write(f"**Available Qty (pcs):** {available_pcs:.0f}")
-            st.write(f"**Available Stock (MT):** {available_mt:.2f}")
-            st.write(f"**Your Order Weight:** {total_weight[0]:.2f} kg ({total_weight[1]:.3f} MT)")
+@app.route("/", methods=["GET", "POST"])
+def index():
+    stock_file = "Stocks(30-08-2025).xlsx"  # Daily updated file
+    stock_df = load_stock(stock_file)
+    result = None
+    
+    if request.method == "POST":
+        user_input = request.form.get("pipe_input")
+        quantity = float(request.form.get("quantity"))
+        parsed = parse_input(user_input)
+        size = parsed["size"]
+        weight = parsed.get("weight")
+        thickness = parsed.get("thickness")
+        
+        result = check_stock(stock_df, size, weight, thickness, qty_required=quantity)
+    
+    return render_template("index.html", result=result)
 
 if __name__ == "__main__":
-    main()
-
-
-
-
-
+    app.run(debug=True)
 
 
