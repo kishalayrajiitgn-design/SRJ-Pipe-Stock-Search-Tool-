@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Pipe Stock Checker</title>
+    <style>
+        body { font-family: Arial; margin: 20px; }
+        input, button { padding: 8px; margin: 5px; }
+        .result { margin-top: 20px; font-size: 18px; }
+    </style>
+</head>
+<body>
+    <h2>Pipe Stock Checker</h2>
+    <form method="POST">
+        <label>Enter Pipe Size / Weight / Thickness:</label><br>
+        <input type="text" name="pipe_input" required style="width:300px;">
+        <br>
+        <label>Enter Quantity Required:</label><br>
+        <input type="number" name="quantity" required>
+        <br>
+        <button type="submit">Check Stock</button>
+    </form>
+
+    {% if result %}
+        <div class="result">
+            Available: <b>{{ result['available'] }}</b><br>
+            Stock Quantity: <b>{{ result['stock_qty'] }}</b>
+        </div>
+    {% endif %}
+</body>
+</html>
