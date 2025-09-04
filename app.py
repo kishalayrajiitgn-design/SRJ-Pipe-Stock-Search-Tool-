@@ -23,7 +23,7 @@ def load_weight():
 # --------------------------
 @st.cache_data
 def load_stock():
-    stock_files = glob.glob(os.path.join(DATA_DIR, "Stocks(*.xlsx)"))
+    stock_files = glob.glob(os.path.join(DATA_DIR, "Stocks*.xlsx"))  # FIXED pattern
     if not stock_files:
         st.error(f"❌ No stock file found in `{DATA_DIR}`. Please upload today's file.")
         st.stop()
@@ -148,6 +148,7 @@ if st.button("🔍 Check Availability"):
                 st.success(f"✅ Stock Available\n\n**{qty} pcs** requested → {qty*wt_per_pipe:.2f} kg\n\nAvailable: {int(pcs)} pcs ({stock_kg:.2f} kg) at thickness {used_thick} mm")
             else:
                 st.warning(f"⚠️ Only **{int(pcs)} pcs** available ({stock_kg:.2f} kg) at thickness {used_thick} mm\n\nRequested: {qty} pcs ({qty*wt_per_pipe:.2f} kg)")
+
 
 
 
