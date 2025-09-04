@@ -121,3 +121,4 @@ if st.button("Check Availability") and query:
     else:
         st.error("❌ Thickness not in stock file.")
 
+
