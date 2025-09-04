@@ -5,9 +5,23 @@ import streamlit as st
 # --- Constants ---
 WEIGHT_FILE = "data/weight per pipe (kg).xlsx"
 
+# --- Normalization Helper ---
+def normalize_pipe_name(name):
+    """Standardize pipe names for matching"""
+    s = str(name).strip().lower()
+    s = s.replace(" ", "")        # remove spaces
+    s = s.replace("x", "×")       # ensure × instead of x
+    s = s.replace("nb", "NB")     # NB uppercase
+    s = s.replace("od", "OD")     # OD uppercase
+    return s
+
 # --- Load Weight File (fixed master) ---
 def load_weight_data():
-    return pd.read_excel(WEIGHT_FILE)
+    df = pd.read_excel(WEIGHT_FILE)
+    # Normalize NB column (3rd col usually has NB sizes)
+    if df.shape[1] >= 3:
+        df.iloc[:,2] = df.iloc[:,2].apply(lambda x: normalize_pipe_name(x) if pd.notna(x) else x)
+    return df
 
 # --- Find latest Stock File (daily) ---
 def get_latest_stock_file():
@@ -20,28 +34,35 @@ def get_latest_stock_file():
 def load_stock_data():
     latest_file = get_latest_stock_file()
     if latest_file and os.path.exists(latest_file):
-        return pd.read_excel(latest_file, sheet_name="Table 1"), latest_file
+        df = pd.read_excel(latest_file, sheet_name="Table 1")
+        # Normalize pipe size column (first column)
+        df.iloc[:,0] = df.iloc[:,0].apply(normalize_pipe_name)
+        return df, latest_file
     return None, None
 
 # --- Parse user input ---
 def parse_input(user_text):
-    user_text = user_text.strip().lower()
+    user_text = user_text.strip()
 
     # Extract thickness (mm) or weight (kg)
-    thickness_match = re.search(r"([\d.]+)\s*mm", user_text)
-    weight_match = re.search(r"([\d.]+)\s*kg", user_text)
+    thickness_match = re.search(r"([\d.]+)\s*mm", user_text.lower())
+    weight_match = re.search(r"([\d.]+)\s*kg", user_text.lower())
 
     thickness = float(thickness_match.group(1)) if thickness_match else None
     weight = float(weight_match.group(1)) if weight_match else None
 
-    # Extract pipe size (first part before space or comma)
+    # Extract pipe size (before space/comma)
     pipe_size = re.split(r"[ ,]", user_text)[0]
+    pipe_size = normalize_pipe_name(pipe_size)
     return pipe_size, thickness, weight
 
 # --- Match pipe size in weight file ---
 def find_weight_per_pipe(weight_df, pipe_size, thickness=None, weight=None):
+    norm_pipe = normalize_pipe_name(pipe_size)
+
+    # Find row with normalized NB column
     row = weight_df[
-        weight_df.astype(str).apply(lambda x: pipe_size in x.values, axis=1)
+        weight_df.astype(str).apply(lambda x: any(normalize_pipe_name(val) == norm_pipe for val in x.values), axis=1)
     ]
     if row.empty:
         return None, None
@@ -51,8 +72,11 @@ def find_weight_per_pipe(weight_df, pipe_size, thickness=None, weight=None):
             return thickness, row[str(thickness)].values[0]
     elif weight:
         for col in row.columns[3:]:
-            if abs(row[col].values[0] - weight) < 0.5:  # tolerance
-                return float(col), row[col].values[0]
+            try:
+                if abs(float(row[col].values[0]) - weight) < 0.5:
+                    return float(col), row[col].values[0]
+            except:
+                continue
     return None, None
 
 # --- Streamlit App ---
@@ -68,6 +92,7 @@ if stock_df is None:
     uploaded_file = st.file_uploader("Upload today's stock file", type="xlsx")
     if uploaded_file:
         stock_df = pd.read_excel(uploaded_file, sheet_name="Table 1")
+        stock_df.iloc[:,0] = stock_df.iloc[:,0].apply(normalize_pipe_name)
         st.success("✅ Stock file uploaded successfully!")
     else:
         st.stop()
@@ -94,7 +119,7 @@ if st.button("Check Availability") and pipe_input:
     # Find stock (MT) for that pipe size + thickness
     if thickness and str(thickness) in stock_df.columns:
         stock_row = stock_df[
-            stock_df.astype(str).apply(lambda x: pipe_size in x.values, axis=1)
+            stock_df.astype(str).apply(lambda x: any(normalize_pipe_name(val) == pipe_size for val in x.values), axis=1)
         ]
         if not stock_row.empty:
             stock_mt = stock_row[str(thickness)].values[0]
@@ -121,4 +146,3 @@ if st.button("Check Availability") and pipe_input:
             st.error("❌ Pipe size not found in stock sheet.")
     else:
         st.error("❌ Thickness column not found in stock sheet.")
-
