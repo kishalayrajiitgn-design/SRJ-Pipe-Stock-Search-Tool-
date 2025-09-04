@@ -158,3 +158,4 @@ if stock_df is not None and weight_df is not None:
                 st.info(f"Your requirement {qty_required} pcs = {qty_required * per_pipe_wt:.1f} kg.")
 
 
+
