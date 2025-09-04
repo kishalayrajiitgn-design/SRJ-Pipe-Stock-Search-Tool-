@@ -12,7 +12,8 @@ WEIGHT_FILE = "data/weight per pipe (kg).xlsx"
 # ----------------------------
 def normalize_name(s):
     """Standardize pipe names for matching"""
-    if not isinstance(s, str): return s
+    if not isinstance(s, str):
+        return s
     s = s.strip().lower()
     s = s.replace(" ", "")
     s = s.replace("×", "x")
@@ -32,12 +33,15 @@ def load_weight_data():
 # LOAD LATEST STOCK DATA
 # ----------------------------
 def get_latest_stock_file():
-    stock_files = glob.glob("data/Stocks*.xlsx")
-    return max(stock_files, key=os.path.getctime) if stock_files else None
+    stock_files = glob.glob("data/Stocks*.xlsx")   # ✅ fixed pattern
+    if not stock_files:
+        return None
+    return max(stock_files, key=os.path.getctime)
 
 def load_stock_data():
     latest_file = get_latest_stock_file()
-    if not latest_file: return None, None
+    if not latest_file:
+        return None, None
     df = pd.read_excel(latest_file, sheet_name="Table 1")
     df = df.applymap(lambda x: normalize_name(x) if isinstance(x, str) else x)
     return df, os.path.basename(latest_file)
@@ -56,7 +60,7 @@ def parse_input(user_text):
     wt_match = re.search(r"([\d.]+)\s*kg", user_text.lower())
     weight = float(wt_match.group(1)) if wt_match else None
 
-    # pipe size = everything before first space/comma/number
+    # pipe size = first token before space/comma/number
     pipe_size = re.split(r"[ ,]", user_text)[0]
     pipe_size = normalize_name(pipe_size)
 
@@ -74,32 +78,38 @@ def find_weight(weight_df, pipe_size, thickness=None, weight=None):
             axis=1,
         )
     ]
-    if row.empty: return None, None
+    if row.empty:
+        return None, None
 
-    # Map thickness cols
+    # Map thickness columns
     thickness_cols = {}
     for col in row.columns[3:]:
         try:
             thickness_cols[float(col)] = col
-        except: pass
+        except:
+            continue
+
+    # ✅ safety check
+    if not thickness_cols:
+        return None, None
 
     if thickness:
-        # exact or nearest thickness
         available = sorted(thickness_cols.keys())
-        closest = min(available, key=lambda x: abs(x-thickness))
+        closest = min(available, key=lambda x: abs(x - thickness))
         chosen_col = thickness_cols[closest]
         return closest, float(row[chosen_col].values[0])
 
     elif weight:
-        # reverse lookup: match by per-pipe weight
-        best = None; min_diff = 999
+        best = None
+        min_diff = 999
         for t, col in thickness_cols.items():
             try:
                 val = float(row[col].values[0])
-                if abs(val-weight) < min_diff:
-                    min_diff = abs(val-weight)
+                if abs(val - weight) < min_diff:
+                    min_diff = abs(val - weight)
                     best = (t, val)
-            except: pass
+            except:
+                continue
         return best if best else (None, None)
 
     return None, None
@@ -113,7 +123,7 @@ weight_df = load_weight_data()
 stock_df, stock_file = load_stock_data()
 
 if stock_df is None:
-    st.error("❌ No stock file found. Upload one in /data/")
+    st.error("❌ No stock file found. Please upload one in /data/")
     st.stop()
 else:
     st.success(f"✅ Using stock file: {stock_file}")
@@ -152,8 +162,12 @@ if st.button("Check Availability") and pipe_input:
             if available_pcs >= quantity:
                 st.success(f"✅ Yes! {quantity} pcs (~{order_kg:.2f} kg) available.")
             else:
-                st.warning(f"⚠️ Only {available_pcs} pcs (~{stock_kg:.2f} kg) available, requested {quantity}.")
+                st.warning(
+                    f"⚠️ Only {available_pcs} pcs (~{stock_kg:.2f} kg) available, "
+                    f"requested {quantity}."
+                )
         else:
             st.error("❌ Pipe size not in stock file.")
     else:
         st.error("❌ Thickness not in stock file.")
+
