@@ -62,7 +62,7 @@ st.sidebar.header("🔍 Search Filters")
 
 pipe_category_input = st.sidebar.text_input("Pipe Category (inch/mm/NB/OD)")
 thickness_input = st.sidebar.text_input("Pipe Thickness (mm, e.g., 1.2-2.5)")
-weight_input = st.sidebar.text_input("Pipe Weight (kg, optional)")
+weight_input = st.sidebar.text_input("Pipe Weight (kg, optional)")  # treat as N/A if blank
 quantity_required = st.sidebar.number_input("Quantity Required", min_value=1, value=1)
 
 # -----------------------
@@ -88,8 +88,8 @@ if thickness_input:
     except:
         st.warning("⚠️ Invalid thickness input. Use number or range like 1.2-2.5")
 
-# Weight filter
-if weight_input:
+# Weight filter → Only apply if user enters something
+if weight_input.strip():
     try:
         df_filtered = df_filtered[df_filtered['Mass_kg'] == float(weight_input)]
     except:
@@ -98,11 +98,10 @@ if weight_input:
 # -----------------------
 # Calculations
 # -----------------------
-# Avoid division errors
-df_filtered = df_filtered.dropna(subset=['Mass_kg'])
-df_filtered = df_filtered[df_filtered['Mass_kg'] > 0]
+# Ignore missing values for Mass_kg
+df_filtered = df_filtered[df_filtered['Mass_kg'].notna() & (df_filtered['Mass_kg'] > 0)]
 
-df_filtered['No_of_Pipes_in_Stock'] = (df_filtered['Stock_MT'] * 1000 / df_filtered['Mass_kg']).fillna(0).round(0)
+df_filtered['No_of_Pipes_in_Stock'] = (df_filtered['Stock_MT'] * 1000 / df_filtered['Mass_kg']).round(0)
 df_filtered['Total_Weight_in_Stock_kg'] = df_filtered['No_of_Pipes_in_Stock'] * df_filtered['Mass_kg']
 df_filtered['Total_Weight_Required_kg'] = df_filtered['Mass_kg'] * quantity_required
 
