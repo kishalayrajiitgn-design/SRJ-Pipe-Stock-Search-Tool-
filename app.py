@@ -48,7 +48,11 @@ df_mass_melted = df_mass.melt(
 df_mass_melted['Thickness_mm'] = df_mass_melted['Thickness_mm'].astype(float)
 df_mass_melted = df_mass_melted.rename(columns={df_mass.columns[0]: 'Pipe Category (mm / NB / OD)'})
 
-df_merged = pd.merge(df_stock_melted, df_mass_melted, on=['Pipe Category (mm / NB / OD)', 'Thickness_mm'], how='left')
+df_merged = pd.merge(
+    df_stock_melted, df_mass_melted,
+    on=['Pipe Category (mm / NB / OD)', 'Thickness_mm'],
+    how='left'
+)
 
 # -----------------------
 # Streamlit UI
@@ -69,8 +73,8 @@ df_filtered = df_merged.copy()
 # Pipe category filter
 if pipe_category_input:
     df_filtered = df_filtered[
-        (df_filtered['Pipe Category (Inches)'].astype(str).str.contains(pipe_category_input, case=False)) |
-        (df_filtered['Pipe Category (mm / NB / OD)'].astype(str).str.contains(pipe_category_input, case=False))
+        (df_filtered['Pipe Category (Inches)'].astype(str).str.contains(pipe_category_input, case=False, na=False)) |
+        (df_filtered['Pipe Category (mm / NB / OD)'].astype(str).str.contains(pipe_category_input, case=False, na=False))
     ]
 
 # Thickness filter
@@ -82,19 +86,23 @@ if thickness_input:
         else:
             df_filtered = df_filtered[df_filtered['Thickness_mm'] == float(thickness_input)]
     except:
-        st.warning("Invalid thickness input. Use number or range like 1.2-2.5")
+        st.warning("⚠️ Invalid thickness input. Use number or range like 1.2-2.5")
 
 # Weight filter
 if weight_input:
     try:
         df_filtered = df_filtered[df_filtered['Mass_kg'] == float(weight_input)]
     except:
-        st.warning("Invalid weight input. Enter a valid number.")
+        st.warning("⚠️ Invalid weight input. Enter a valid number.")
 
 # -----------------------
 # Calculations
 # -----------------------
-df_filtered['No_of_Pipes_in_Stock'] = (df_filtered['Stock_MT'] * 1000 / df_filtered['Mass_kg']).round(0)
+# Avoid division errors
+df_filtered = df_filtered.dropna(subset=['Mass_kg'])
+df_filtered = df_filtered[df_filtered['Mass_kg'] > 0]
+
+df_filtered['No_of_Pipes_in_Stock'] = (df_filtered['Stock_MT'] * 1000 / df_filtered['Mass_kg']).fillna(0).round(0)
 df_filtered['Total_Weight_in_Stock_kg'] = df_filtered['No_of_Pipes_in_Stock'] * df_filtered['Mass_kg']
 df_filtered['Total_Weight_Required_kg'] = df_filtered['Mass_kg'] * quantity_required
 
@@ -102,7 +110,7 @@ df_filtered['Total_Weight_Required_kg'] = df_filtered['Mass_kg'] * quantity_requ
 def availability_status(row):
     if row['No_of_Pipes_in_Stock'] >= quantity_required:
         return "✅ Available"
-    elif 0 < row['No_of_Pipes_in_Stock'] < quantity_required:
+    elif row['No_of_Pipes_in_Stock'] > 0:
         return "⚠️ Low Stock"
     else:
         return "❌ Not Available"
@@ -114,7 +122,6 @@ df_filtered['Availability_Status'] = df_filtered.apply(availability_status, axis
 # -----------------------
 st.subheader("🔹 Search Results")
 
-# Use styled dataframe with colors
 def highlight_availability(row):
     if row['Availability_Status'] == "✅ Available":
         return ['background-color: #d4edda']*len(row)
@@ -126,7 +133,8 @@ def highlight_availability(row):
 st.dataframe(
     df_filtered[['Pipe Category (Inches)', 'Pipe Category (mm / NB / OD)', 'Thickness_mm',
                  'Mass_kg', 'Stock_MT', 'No_of_Pipes_in_Stock', 'Total_Weight_in_Stock_kg',
-                 'Total_Weight_Required_kg', 'Availability_Status']].style.apply(highlight_availability, axis=1)
+                 'Total_Weight_Required_kg', 'Availability_Status']]
+    .style.apply(highlight_availability, axis=1)
 )
 
-st.write(f"Latest stock file used: {os.path.basename(latest_stock_file)}")
+st.write(f"📂 Using latest stock file: **{os.path.basename(latest_stock_file)}**")
