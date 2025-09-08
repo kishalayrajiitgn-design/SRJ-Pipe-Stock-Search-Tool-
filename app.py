@@ -6,7 +6,7 @@ import os
 import re
 from datetime import datetime
 
-st.set_page_config(page_title="Pipe Stock Search Tool", layout="wide")
+st.set_page_config(page_title="SRJ Peety Steels Private Limited Pipe Stock Search Tool", layout="wide")
 
 DATA_FOLDER = "data"
 PIPE_MASS_FILE = os.path.join(DATA_FOLDER, "pipe_mass.xlsx")  # fixed file
