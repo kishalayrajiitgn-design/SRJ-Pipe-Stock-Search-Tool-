@@ -1,117 +1,91 @@
 import pandas as pd
 import streamlit as st
-import glob
+import numpy as np
 import os
 
-# ----------------------------
-# 1. Generate weight.xlsx from width.xlsx (fixed)
-# ----------------------------
-def generate_weight_file():
-    width_file = "data/width.xlsx"
-    weight_file = "data/weight.xlsx"
+st.set_page_config(page_title="Pipe Sales Search Tool", layout="wide")
 
-    if not os.path.exists(weight_file):
-        df_width = pd.read_excel(width_file)
-        df_weight = []
+# ---------------------------
+# Paths to your data
+# ---------------------------
+WIDTH_FILE = "data/width.xlsx"
+STOCK_FILE = "data/latest_stock.xlsx"  # always rename daily stock to this
+WEIGHT_FILE = "data/weight.xlsx"
 
-        thickness_cols = df_width.columns[1:]  # All columns except first (Pipe Category)
-        for _, row in df_width.iterrows():
-            pipe_category = row[0]
-            for col in thickness_cols:
-                thickness = float(col.split()[2])  # Extract thickness in mm from column header
-                width = row[col]
-                if pd.notna(width):
-                    mass = 0.0471 * width * thickness  # Mass formula
-                    df_weight.append({
-                        "Pipe Category": pipe_category,
-                        "Thickness_mm": thickness,
-                        "Weight_kg": mass
-                    })
+# ---------------------------
+# 1. Prepare weight.xlsx from width.xlsx
+# ---------------------------
+def generate_weight_file(width_file=WIDTH_FILE, weight_file=WEIGHT_FILE):
+    df = pd.read_excel(width_file)
+    # Melt width data: Thickness as variable
+    df_melted = df.melt(id_vars=['Pipe Category (NB/OD/mm)'], 
+                        var_name='Thickness_mm', value_name='Width_mm')
+    # Extract numeric thickness
+    df_melted['Thickness_mm'] = df_melted['Thickness_mm'].str.extract(r'([\d.]+)').astype(float)
+    # Calculate mass per pipe (6 m length, density 7850 kg/m3)
+    df_melted['Mass_kg'] = 0.0471 * df_melted['Width_mm'] * df_melted['Thickness_mm']
+    df_melted.to_excel(weight_file, index=False)
+    return df_melted
 
-        df_weight = pd.DataFrame(df_weight)
-        df_weight.to_excel(weight_file, index=False)
-        st.write("weight.xlsx created successfully.")
-    else:
-        st.write("weight.xlsx already exists.")
+if not os.path.exists(WEIGHT_FILE):
+    df_weight = generate_weight_file()
+else:
+    df_weight = pd.read_excel(WEIGHT_FILE)
 
-# ----------------------------
-# 2. Read latest stock file
-# ----------------------------
-def read_latest_stock():
-    stock_files = glob.glob("data/Stocks(*).xlsx")
-    if not stock_files:
-        st.error("No stock files found in data folder!")
-        return None
+# ---------------------------
+# 2. Load daily stock
+# ---------------------------
+if not os.path.exists(STOCK_FILE):
+    st.warning("Latest stock file not found. Upload today's stock as 'latest_stock.xlsx' in data folder.")
+    st.stop()
 
-    latest_file = max(stock_files, key=os.path.getctime)
-    df_stock = pd.read_excel(latest_file)
-    df_stock.columns = df_stock.columns.str.strip()  # remove spaces
-    return df_stock, latest_file
+df_stock = pd.read_excel(STOCK_FILE)
+# Melt stock data for easier search
+thickness_cols = [col for col in df_stock.columns if "Thickness" in col]
+df_stock_melted = df_stock.melt(id_vars=['Pipe Category (Inches)', 'Pipe Category (mm/NB/OD)'], 
+                                value_vars=thickness_cols,
+                                var_name='Thickness_mm',
+                                value_name='Stock_MT')
+df_stock_melted['Thickness_mm'] = df_stock_melted['Thickness_mm'].str.extract(r'([\d.]+)').astype(float)
 
-# ----------------------------
-# 3. Merge stock with weight data
-# ----------------------------
-def prepare_stock_data(df_stock, df_weight):
-    # Melt stock data (thickness columns to rows)
-    thickness_cols = [col for col in df_stock.columns if "Thickness" in col]
-    df_melted = df_stock.melt(id_vars=["Pipe Category (Inches)", "Pipe Category (mm / NB / OD)"],
-                              value_vars=thickness_cols,
-                              var_name="Thickness_mm",
-                              value_name="Stock_MT")
-    # Convert thickness column to numeric
-    df_melted['Thickness_mm'] = df_melted['Thickness_mm'].str.extract(r'([\d\.]+)').astype(float)
-    # Merge weight
-    df_merged = pd.merge(df_melted, df_weight, how='left', left_on=['Pipe Category (mm / NB / OD)', 'Thickness_mm'],
-                         right_on=['Pipe Category', 'Thickness_mm'])
-    # Calculate number of pipes
-    df_merged['Stock_Pipes'] = (df_merged['Stock_MT'] * 1000) / df_merged['Weight_kg']
-    df_merged.fillna(0, inplace=True)
-    return df_merged
+# Merge with weight.xlsx to get mass per pipe
+df_data = pd.merge(df_stock_melted, df_weight, 
+                   left_on=['Pipe Category (mm/NB/OD)', 'Thickness_mm'],
+                   right_on=['Pipe Category (NB/OD/mm)', 'Thickness_mm'],
+                   how='left')
+df_data['No_of_Pipes'] = np.where(df_data['Mass_kg']>0, df_data['Stock_MT']*1000/df_data['Mass_kg'], 0)
+df_data['Available'] = np.where(df_data['No_of_Pipes']>0, 'Yes', 'No')
 
-# ----------------------------
-# 4. Streamlit UI
-# ----------------------------
+# ---------------------------
+# 3. Streamlit UI
+# ---------------------------
 st.title("Pipe Sales Search Tool")
-st.write("Search pipes by category, thickness, weight, and check stock availability.")
+st.markdown("Search pipes by category, thickness, weight, and check stock availability.")
 
-# Generate weight file if not exists
-generate_weight_file()
+# Filters
+pipe_category_input = st.text_input("Enter Pipe Category (Inches / NB / OD / mm)", "")
+thickness_min, thickness_max = st.slider("Thickness (mm)", 1.2, 7.0, (1.2, 7.0))
+weight_min, weight_max = st.slider("Weight per pipe (kg)", 0.0, 1000.0, (0.0, 1000.0))
+quantity_required = st.number_input("Quantity Required", min_value=1, value=1)
 
-# Load weight data
-df_weight = pd.read_excel("data/weight.xlsx")
+# Filter data
+df_filtered = df_data.copy()
+if pipe_category_input:
+    df_filtered = df_filtered[df_filtered['Pipe Category (Inches)'].str.contains(pipe_category_input, case=False, na=False) |
+                              df_filtered['Pipe Category (mm/NB/OD)'].str.contains(pipe_category_input, case=False, na=False)]
 
-# Load latest stock
-df_stock, latest_file = read_latest_stock()
-if df_stock is not None:
-    st.write(f"Latest stock file: {os.path.basename(latest_file)}")
-    df_data = prepare_stock_data(df_stock, df_weight)
+df_filtered = df_filtered[(df_filtered['Thickness_mm'] >= thickness_min) &
+                          (df_filtered['Thickness_mm'] <= thickness_max)]
+df_filtered = df_filtered[(df_filtered['Mass_kg'] >= weight_min) &
+                          (df_filtered['Mass_kg'] <= weight_max)]
 
-    # Sidebar filters
-    pipe_category = st.selectbox("Pipe Category (Inches / NB / OD / mm):",
-                                 df_data['Pipe Category (mm / NB / OD)'].unique())
-    thickness_range = st.slider("Pipe Thickness Range (mm):", 
-                                min_value=float(df_data['Thickness_mm'].min()), 
-                                max_value=float(df_data['Thickness_mm'].max()), 
-                                value=(1.2, 7.0), step=0.1)
-    weight_range = st.slider("Pipe Weight Range (kg, optional):",
-                             min_value=float(df_data['Weight_kg'].min()), 
-                             max_value=float(df_data['Weight_kg'].max()),
-                             value=(0.0, float(df_data['Weight_kg'].max())))
-    quantity_required = st.number_input("Quantity Required:", min_value=1, value=10)
+# Calculate stock based on requested quantity
+df_filtered['Can_Fulfill'] = np.where(df_filtered['No_of_Pipes'] >= quantity_required, 'Yes', 'No')
 
-    # Filter data
-    df_filtered = df_data[df_data['Pipe Category (mm / NB / OD)'] == pipe_category]
-    df_filtered = df_filtered[(df_filtered['Thickness_mm'] >= thickness_range[0]) &
-                              (df_filtered['Thickness_mm'] <= thickness_range[1])]
-    df_filtered = df_filtered[(df_filtered['Weight_kg'] >= weight_range[0]) &
-                              (df_filtered['Weight_kg'] <= weight_range[1])]
-    
-    # Calculate availability
-    df_filtered['Available'] = df_filtered['Stock_Pipes'] >= quantity_required
-    df_filtered['Quantity_Available'] = df_filtered['Stock_Pipes']
+# Display results
+st.dataframe(df_filtered[['Pipe Category (Inches)', 'Pipe Category (mm/NB/OD)', 'Thickness_mm', 
+                          'Mass_kg', 'Stock_MT', 'No_of_Pipes', 'Available', 'Can_Fulfill']].reset_index(drop=True))
 
-    st.write("Filtered Stock Data:")
-    st.dataframe(df_filtered[['Pipe Category (Inches)', 'Pipe Category (mm / NB / OD)',
-                              'Thickness_mm', 'Weight_kg', 'Stock_MT', 'Stock_Pipes',
-                              'Available', 'Quantity_Available']].sort_values(by='Thickness_mm'))
+st.markdown(f"Total records found: {len(df_filtered)}")
+
 
