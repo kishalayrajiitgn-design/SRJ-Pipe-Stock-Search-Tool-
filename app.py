@@ -42,6 +42,7 @@ df_mass_melted = df_mass.melt(
     var_name='Thickness_mm',
     value_name='Mass_kg'
 )
+df_mass_melted['Thickness_mm'] = df_mass_melted['Thickness_mm'].astype(float)
 
 # Melt stock file
 pipe_col_stock = df_stock.columns[1]  # 'Pipe Category (mm / NB / OD)'
@@ -55,7 +56,6 @@ df_stock_melted = df_stock.melt(
 
 # Clean Thickness column
 df_stock_melted['Thickness_mm'] = df_stock_melted['Thickness_mm'].str.extract(r'(\d+\.?\d*)').astype(float)
-df_mass_melted['Thickness_mm'] = df_mass_melted['Thickness_mm'].astype(float)
 
 # Merge stock and mass
 df_merged = pd.merge(
@@ -73,8 +73,11 @@ df_merged['No_of_Pipes'] = df_merged['Stock_Kg'] / df_merged['Mass_kg']
 # ----------------------------
 # User inputs
 # ----------------------------
-st.sidebar.header("Search Criteria")
-pipe_input = st.sidebar.text_input("Pipe Category (inch/mm/NB/OD):").strip()
+st.sidebar.header("Search Criteria (Flexible)")
+
+pipe_input = st.sidebar.text_input(
+    "Pipe Category (inch/mm/NB/OD or format like 100x100):").strip()
+
 thickness_input = st.sidebar.text_input("Thickness (mm, optional):").strip()
 weight_input = st.sidebar.text_input("Pipe Weight (kg, optional):").strip()
 quantity_required = st.sidebar.number_input("Quantity Required (No. of Pipes):", min_value=0, step=1)
@@ -84,11 +87,13 @@ quantity_required = st.sidebar.number_input("Quantity Required (No. of Pipes):",
 # ----------------------------
 df_filtered = df_merged.copy()
 
-# Pipe category filter
+# Pipe category filter: flexible search
 if pipe_input:
+    # Remove spaces and lowercase for matching
+    search_val = pipe_input.replace(" ", "").lower()
     df_filtered = df_filtered[
-        df_filtered[pipe_col_stock].str.contains(pipe_input, case=False, na=False) |
-        df_filtered[df_mass.columns[0]].str.contains(pipe_input, case=False, na=False)
+        df_filtered[pipe_col_stock].str.replace(" ", "").str.lower().str.contains(search_val, na=False) |
+        df_filtered[pipe_col_mass].str.replace(" ", "").str.lower().str.contains(search_val, na=False)
     ]
 
 # Thickness filter
@@ -113,12 +118,14 @@ if weight_input:
 if not df_filtered.empty:
     df_filtered['Available'] = df_filtered['No_of_Pipes'] >= quantity_required
     df_filtered['Total_Weight_Required'] = df_filtered['Mass_kg'] * quantity_required
+    df_filtered['Quantity_Available'] = df_filtered['No_of_Pipes'].apply(lambda x: int(x))
 
     st.subheader("Search Results")
     st.dataframe(df_filtered[[
-        df_stock.columns[0], pipe_col_stock, 'Thickness_mm', 'Mass_kg', 'Stock_MT', 'No_of_Pipes',
-        'Available', 'Total_Weight_Required'
+        df_stock.columns[0], pipe_col_stock, 'Thickness_mm', 'Mass_kg',
+        'Stock_MT', 'Quantity_Available', 'Available', 'Total_Weight_Required'
     ]].sort_values(['Available'], ascending=False))
+
 else:
     st.warning("No matching pipes found.")
 
