@@ -9,7 +9,7 @@ st.set_page_config(page_title="Pipe Sales Search Tool", layout="wide")
 # Paths to your data
 # ---------------------------
 WIDTH_FILE = "data/width.xlsx"
-STOCK_FILE = "data/latest_stock.xlsx"  # always rename daily stock to this
+STOCK_FILE = "data/Stocks(30-08-2025).xlsx"  # always rename daily stock to this
 WEIGHT_FILE = "data/weight.xlsx"
 
 # ---------------------------
